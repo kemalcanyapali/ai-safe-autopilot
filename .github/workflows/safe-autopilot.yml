@@ -23,16 +23,16 @@ jobs:
       review-reason-count: ${{ steps.policy.outputs.review_reason_count }}
     steps:
       - name: Check out caller repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           path: workspace
 
       - name: Check out policy engine
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: kemalcanyapali/ai-safe-autopilot
-          ref: v1.0.0
+          ref: v1.0.1
           persist-credentials: false
           path: autopilot
 
@@ -74,7 +74,8 @@ jobs:
           base="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
           number="$(gh pr list --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --state open --json number --jq '.[0].number')"
           if [ -z "$number" ]; then
-            gh pr create --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --fill
+            title="$(gh api "repos/${REPOSITORY}/commits/${BRANCH}" --jq '.commit.message | split("\n")[0]')"
+            gh pr create --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --title "$title" --body "Automated AI change. Policy and repository validation passed."
             number="$(gh pr list --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --state open --json number --jq '.[0].number')"
           fi
           test -n "$number"

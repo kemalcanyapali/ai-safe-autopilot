@@ -19,7 +19,7 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
-    uses: kemalcanyapali/ai-safe-autopilot/.github/workflows/safe-autopilot.yml@v1.0.0
+    uses: kemalcanyapali/ai-safe-autopilot/.github/workflows/safe-autopilot.yml@v1.0.1
     with:
       validation-command: python -m unittest discover -s tests -v
     secrets:
