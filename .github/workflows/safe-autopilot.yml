@@ -1,0 +1,95 @@
+name: Safe Autopilot
+
+on:
+  workflow_call:
+    inputs:
+      validation-command:
+        description: Repository-specific validation command
+        required: false
+        type: string
+        default: ""
+    secrets:
+      token:
+        description: Caller repository GITHUB_TOKEN
+        required: true
+
+jobs:
+  policy:
+    name: AI policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      requires-review: ${{ steps.policy.outputs.requires_review }}
+      review-reason-count: ${{ steps.policy.outputs.review_reason_count }}
+    steps:
+      - name: Check out caller repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: workspace
+
+      - name: Check out policy engine
+        uses: actions/checkout@v4
+        with:
+          repository: kemalcanyapali/ai-safe-autopilot
+          ref: v1.0.0
+          persist-credentials: false
+          path: autopilot
+
+      - name: Fetch default branch
+        working-directory: workspace
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git fetch --no-tags origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+
+      - id: policy
+        name: Enforce AI change policy
+        working-directory: workspace
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python ../autopilot/policy.py --base "$BASE_BRANCH" --github-output "$GITHUB_OUTPUT"
+
+      - name: Run repository validation
+        if: ${{ inputs.validation-command != '' }}
+        working-directory: workspace
+        shell: bash
+        run: ${{ inputs.validation-command }}
+
+  open-pull-request:
+    name: Open and queue pull request
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/ai/') }}
+    needs: policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.token }}
+      BRANCH: ${{ github.ref_name }}
+      REPOSITORY: ${{ github.repository }}
+      REQUIRES_REVIEW: ${{ needs.policy.outputs.requires-review }}
+    steps:
+      - name: Create or locate pull request
+        id: pull-request
+        shell: bash
+        run: |
+          base="$(gh api "repos/${REPOSITORY}" --jq .default_branch)"
+          number="$(gh pr list --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --state open --json number --jq '.[0].number')"
+          if [ -z "$number" ]; then
+            gh pr create --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --fill
+            number="$(gh pr list --repo "$REPOSITORY" --head "$BRANCH" --base "$base" --state open --json number --jq '.[0].number')"
+          fi
+          test -n "$number"
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Mark sensitive pull request for review
+        if: ${{ env.REQUIRES_REVIEW == 'true' }}
+        env:
+          NUMBER: ${{ steps.pull-request.outputs.number }}
+        run: |
+          gh label create ai-needs-review --repo "$REPOSITORY" --color B60205 --description "Sensitive AI change requiring human review" --force
+          gh pr edit "$NUMBER" --repo "$REPOSITORY" --add-label ai-needs-review
+
+      - name: Queue safe pull request for squash merge
+        if: ${{ env.REQUIRES_REVIEW != 'true' }}
+        env:
+          NUMBER: ${{ steps.pull-request.outputs.number }}
+        run: gh pr merge "$NUMBER" --repo "$REPOSITORY" --auto --squash --delete-branch
